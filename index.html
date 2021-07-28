@@ -1,0 +1,522 @@
+<html>
+<head>
+<style>
+body{
+	padding:20px;
+	margin:20px;
+	background-color:#ecd4b3;
+}
+</style>
+<script>
+// https://en.wikipedia.org/wiki/Ray_tracing_(graphics)
+// https://en.wikipedia.org/wiki/Line%E2%80%93sphere_intersection
+// http://learnwebgl.brown37.net/09_lights/lights_specular.html
+// file:///C:/Users/ers_k/Desktop/2019_Book_RayTracingGems.pdf
+var canvas1;
+var ctx;
+
+var canvas2;
+var ctx2;
+
+var timeLast = new Date().getTime();
+
+var dot_product = function(v1, v2){
+	return (	v1.x*v2.x + 
+				v1.y*v2.y + 
+				v1.z*v2.z );
+}
+
+var vector3d = function(x, y, z){
+	this.x = x;
+	this.y = y;
+	this.z = z;
+	
+	this.getLength = function(){
+		return Math.sqrt(	this.x * this.x + 
+							this.y * this.y +
+							this.z * this.z );
+	}
+	
+	this.normalise = function(){
+		var l = this.getLength();
+		
+		return new vector3d(this.x / l,
+							this.y / l,
+							this.z / l );
+	}
+	
+	this.inverse = function(){
+		return new vector3d(-x, -y, -z);
+	}
+	
+	this.square = function(){
+		return dot_product(this, this);
+	}
+	
+	this.mult = function(m){
+		return new vector3d(	this.x * m, 
+								this.y * m,
+								this.z * m );
+	}
+	
+	this.add = function(v){
+		return new vector3d(	this.x + v.x, 
+								this.y + v.y,
+								this.z + v.z );
+	}
+	
+	this.subtract = function(v){
+		return new vector3d(	this.x - v.x, 
+								this.y - v.y,
+								this.z - v.z );
+	}
+	
+	this.dot_product = function(v){
+		return dot_product(this, v);
+	}
+}
+
+var ray_reflection = function(	rayIn, 	// gelen ray
+								dist, 	// ray ın origin inin yüzeye uzaklığı
+								surface_color,	// yüzey rengi
+								surface_normal 	// yüzeyin normal vektörü
+								){
+
+	var L = rayIn.direction.mult(dist);
+	var minusL = L.mult(-1);
+	
+	var s = minusL.dot_product(surface_normal);
+	var N = surface_normal.mult(s);
+	var R = N.mult(2).add(L);
+	
+	var rayOut = new ray();
+	
+	var rayOut_origin = rayIn.getPoint(dist);// yansıyan ray ın origini önceki ray ın yüzeye çarptığı noktadır
+	
+	rayOut.set_origin(rayOut_origin.x, rayOut_origin.y, rayOut_origin.z);
+	rayOut.set_direction(R.x, R.y, R.z);
+	
+	//rayOut.color[0] = rayIn.color[0]*surface_color[0];
+	//rayOut.color[1] = rayIn.color[1]*surface_color[1];
+	//rayOut.color[2] = rayIn.color[2]*surface_color[2];
+	
+	return rayOut;
+}
+
+var plane = function(px, py, pz, nx, ny, nz){
+	this.origin = new vector3d(px, py, pz);
+	this.normal = new vector3d(nx, ny, nz);
+	
+	this.color = new Array(255, 255, 255);
+	this.isLight = false;
+	
+	this.ray_intersect = function(rayIn){
+		var ln = rayIn.direction.dot_product(this.normal);
+		if ( ln==0 ){
+			return Number.NaN;// line plane üzerinde
+		}
+		
+		var pl = this.origin.subtract(rayIn.origin);
+		var pln = pl.dot_product(this.normal);
+		
+		var dist = pln / ln;
+		
+		var rh = new rayHit();
+		rh.intersect_distance = dist;
+		if ( dist>=0 ){
+			rh.intersect_point = rayIn.getPoint(dist);
+			rh.surface_normal = this.normal;
+		}
+		return rh;
+	}
+	
+	/*this.ray_reflection = function(rayIn){
+		//ray_reflection(rayIn, 
+	}*/
+}
+
+var sphere = function(x, y, z, r){
+	this.origin = new vector3d(x, y, z);
+	this.radius = r;
+	
+	this.color = new Array(255, 255, 255);
+	this.isLight = false;
+	
+	this.getNormal = function(x, y, z){
+		var n = new vector3d(x, y, z);
+		n = n.subtract(this.origin);
+		n = n.normalise();
+		
+		return n;
+	}
+	
+	// kesişme varsa ray'ın küre'ye olan uzaklığını döndürür
+	// kesişme yoksa Number.NaN döndürür
+	this.ray_intersect = function(rayIn){
+		var v = rayIn.origin.subtract(this.origin);
+		var v_square = v.square();
+		var r_square = this.radius * this.radius;
+		var vd = v.dot_product(rayIn.direction);
+		
+		var delta = vd*vd - (v_square-r_square);
+		var dist;
+		if ( delta<0 ){
+			dist = Number.NaN;
+		}else{
+			var t1 = -vd + Math.sqrt( delta );
+			var t2 = -vd - Math.sqrt( delta );
+			dist = Math.min(t1, t2);
+		}
+		
+		var rh = new rayHit();
+		rh.intersect_distance = dist;
+		if ( dist>=0 ){
+			rh.intersect_point = rayIn.getPoint(dist);
+			rh.surface_normal = this.getNormal(	rh.intersect_point.x, 
+												rh.intersect_point.y, 
+												rh.intersect_point.z );
+		}
+		return rh;
+	}
+}
+
+// ray üzerindeki noktalar -> x = origin + direction*distance
+var ray = function(){
+	this.origin;// origin
+	this.direction;// unit vector
+	
+	//this.color = new Array(255, 255, 255);
+	
+	this.getPoint = function(dist){
+		var v = this.direction.mult(dist);
+		return this.origin.add(v);
+	}
+	
+	this.set_origin = function(x, y, z){
+		this.origin = new vector3d(x, y, z);
+	}
+	
+	this.set_direction = function(x, y, z){
+		var v = new vector3d(x, y, z);
+		this.direction = v.normalise();
+	}
+	
+	this.set_destination = function(x, y, z){
+		var v = new vector3d(	x - this.origin.x, 
+								y - this.origin.y, 
+								z - this.origin.z );
+		
+		v = v.normalise();
+		this.direction = v;
+	}
+}
+
+var rayHit = function(){
+	this.rayIn = null;		// ray
+	this.hitObject = null;	// ray ın çarptığı obje
+	this.intersect_point = null;
+	this.intersect_distance = 0;
+	this.surface_normal = null;
+}
+
+var sphere1 = new sphere(0, 0, 0, 3);
+sphere1.color = new Array(0, 255, 0);
+
+var sphere2 = new sphere(5, 1, -1, 2);
+sphere2.color = new Array(255, 0, 0);
+
+var light1 = new sphere(2, 5, -5, 1);
+light1.isLight = true;
+
+var light2 = new sphere(15, 1, -6, 2);
+light2.isLight = true;
+
+var planeTop = new plane(	0, 10, 0,
+							0, -1, 0 );
+						
+var planeBottom = new plane(	0, -3, 0,
+								0, 1, 0 );
+planeBottom.color[0] = 0;
+planeBottom.color[1] = 0;
+planeBottom.color[2] = 255;
+
+var planeLeft = new plane(	-10, 0, 0,
+							1, 0, 0 );
+
+var planeRight = new plane(	10, 0, 0,
+							-1, 0, 0 );
+
+var planeFront = new plane(	0, 0, -50,
+							0, 0, 1 );
+						
+var planeBack = new plane(	0, 0, 50,
+							0, 0, -1 );
+
+var objectList = [];
+objectList.push(sphere1);
+objectList.push(sphere2);
+
+objectList.push(light1);
+//objectList.push(light2);
+
+//objectList.push(planeTop);
+objectList.push(planeBottom);
+//objectList.push(planeLeft);
+//objectList.push(planeRight);
+//objectList.push(planeFront);
+//objectList.push(planeBack);
+
+var screen = new function(){
+	this.left 		= -10;	// ekranın sol kenarı
+	this.right 		= 10;	// ekranın sağ kenarı
+	this.top 		= 10;	// ekranın üst kenarı
+	this.bottom 	= -10;	// ekranın alt kenarı
+	this.z 			= 0;	// ekranın bulunduğu z koordinatı
+	this.eye_dist 	= 10;	// gözün ekrana olan uzaklığı, göz -z yönüne doğru bakar
+	this.bounceMax 	= 10;
+	
+	
+	this.width 	= this.right - this.left; // ekranın genişliği
+	this.height = this.top - this.bottom; // ekranın yüksekliği
+	
+	this.eyePosition = new vector3d(	(this.left + this.right)/2, 
+										(this.top + this.bottom)/2, 
+										this.z + this.eye_dist );
+	
+	// pixel koordinatını vector3d koordinatına dönüştürür
+	this.convert_pixel_to_vertex = function(x, y){
+		// 0,1 arasına değerlere dönüştürülüyor
+		var xx = x / canvas1.width;
+		var yy = y / canvas1.height;
+		
+		// vertex koordinatlarına dönüştürülüyor
+		var sx = screen.left + screen.width*xx;
+		var sy = screen.top - screen.height*yy;
+		
+		var v = new vector3d(sx, sy, this.z);
+		return v;
+	}
+	
+	this.getEyeRay = function(x, y){
+		var destination = this.convert_pixel_to_vertex(x, y);
+		
+		var ray_eye = new ray();
+	
+		ray_eye.set_origin(this.eyePosition.x, this.eyePosition.y, this.eyePosition.z);
+		ray_eye.set_destination(destination.x, destination.y, destination.z);
+		
+		return ray_eye;
+	}
+};
+
+function getClosestIntersectionObject(rayIn, objExclude){
+	var distMin = Number.POSITIVE_INFINITY;
+	var objClosest = null;
+	for(var i=0; i<objectList.length; i++){
+		var obj = objectList[i];
+		if ( obj != objExclude ){
+			var rh = obj.ray_intersect(rayIn);
+			if ( rh.intersect_point!=null ){
+				if ( objClosest==null || rh.intersect_distance<distMin ){
+					objClosest = obj;
+					distMin = rh.intersect_distance;
+				}
+			}
+		}
+	}
+	
+	return objClosest;
+}
+
+function getLightIntersectionCount(xx, yy, zz){
+	var blockedLightCount = 0;
+	var totalLightCount = 0;
+	for(var i=0; i<objectList.length; i++){
+		var objLight = objectList[i];
+		
+		if ( objLight.isLight==true ){
+			totalLightCount++;
+			
+			var ray_to_light = new ray();
+			ray_to_light.set_origin(xx, yy, zz);
+			ray_to_light.set_destination(objLight.origin.x, objLight.origin.y, objLight.origin.z);
+			
+			for(var i2=0; i2<objectList.length; i2++){
+				var objMesh = objectList[i2];
+				if ( objMesh.isLight==false ){
+					var rh = objMesh.ray_intersect(ray_to_light);
+					if ( rh.intersect_point!=null ){
+						blockedLightCount++;
+					}
+				}
+			}
+		}
+	}
+	return {
+		blockedLightCount:blockedLightCount,
+		totalLightCount:totalLightCount
+	};
+}
+
+// x = 0 ... width(pixel)
+// y = 0 ... height(pixel)
+var pleaseDebugOnce = false;
+function shader(x, y){
+	var ray_eye = screen.getEyeRay(x, y);
+	
+	var color = new Array(0, 0, 0);
+	
+	var ray_cur = ray_eye;
+	if ( pleaseDebugOnce==true ){
+		debugger;
+		pleaseDebugOnce = false;
+	}
+	var noLightFactor = .5;
+	var objClosest = null;
+	for(var i=0; i<screen.bounceMax; i++){
+		objClosest = getClosestIntersectionObject(ray_cur, objClosest);
+		if ( objClosest!=null ){
+			color[0] = objClosest.color[0]+color[0];
+			color[1] = objClosest.color[1]+color[1];
+			color[2] = objClosest.color[2]+color[2];
+			
+			if ( objClosest.isLight==true ){
+				return {
+						r:objClosest.color[0],
+						g:objClosest.color[1],
+						b:objClosest.color[2],
+						a:255
+					};
+			}else{
+				var rh = objClosest.ray_intersect(ray_cur);
+				
+				var v1 = rh.surface_normal.mult(0.1).add(rh.intersect_point);
+				var lic = getLightIntersectionCount(v1.x, v1.y, v1.z);
+				if ( lic.blockedLightCount>0 ){
+					var tmp = color[0]+color[1]+color[2];
+					color[0] = 0;//Math.floor(tmp*.2);
+					color[1] = 0;//Math.floor(tmp*.2);
+					color[2] = 0;//Math.floor(tmp*.2);
+					return {
+						r:color[0],
+						g:color[1],
+						b:color[2],
+						a:255
+					};/**/
+				}else{
+					var dummy = 0;
+				}
+				
+				
+				
+				// zaten biliyoruz kesişme var --> getClosestIntersectionObject
+				//if ( isNaN(dist) || dist<0 ){
+					//return null;// kesişme yoksa veya geriye doğru kesişme varsa
+					//break;
+				//}
+				
+				ray_cur = ray_reflection(	ray_cur, 
+											rh.intersect_distance, 
+											objClosest.color, 
+											rh.surface_normal );
+			}
+		}else{
+			if ( color[0]<127 && color[0]!=0 ){
+				//debugger;
+			}
+			break;
+		}
+	}
+	if ( i==0 ){
+		color[0] = 0;
+		color[1] = 0;
+		color[2] = 0;
+	}else{
+		color[0] = Math.floor(color[0]*noLightFactor/(i));
+		color[1] = Math.floor(color[1]*noLightFactor/(i));
+		color[2] = Math.floor(color[2]*noLightFactor/(i));
+	}
+	return {
+				r:color[0],
+				g:color[1],
+				b:color[2],
+				a:255
+			};
+}
+
+function drawFrame(){
+	var timeNow = new Date().getTime();
+	
+	var timeDiff = timeNow - timeLast;
+	
+	const imageData = ctx.getImageData(0, 0, canvas1.width, canvas1.height);
+	const data = imageData.data;
+	for(var x=0; x<canvas1.width; x++){
+		for(var y=0; y<canvas1.height; y++){			
+			var i = (y*canvas1.width+x)*4;
+
+			var ret = shader(x, y);
+			if ( ret!=null ){
+				data[i+0] = ret.r;
+				data[i+1] = ret.g;
+				data[i+2] = ret.b;
+				data[i+3] = ret.a;
+			}else{
+				data[i+0] = 0;
+				data[i+1] = 0;
+				data[i+2] = 0;
+				data[i+3] = 255;
+			}
+		}
+    }
+    ctx.putImageData(imageData, 0, 0);
+	
+	//window.requestAnimationFrame(drawFrame);
+}
+
+window.onload=function(){
+	canvas1 = document.getElementById('canvas1');
+	canvas1.width = 600;
+	canvas1.height = 600;
+	ctx = canvas1.getContext('2d');
+	
+	canvas1.addEventListener('mousemove', e => {
+		var data = ctx.getImageData(e.offsetX, e.offsetY, 1, 1);
+		
+		var r = data.data[0];
+		var g = data.data[1];
+		var b = data.data[2];
+		ctx2.fillStyle = `rgb(${r},${g},${b})`;
+		ctx2.fillRect(0, 0, canvas2.width, canvas2.height);
+		
+		var obj = document.getElementById('divText');
+		obj.innerHTML = `${r} ${g} ${b}`;
+	});
+	
+	canvas1.addEventListener('click', e => {
+		console.log(`${e.offsetX} ${e.offsetY}`);
+		pleaseDebugOnce = true;
+		shader(e.offsetX, e.offsetY);
+	});
+	
+	canvas2 = document.getElementById('canvas2');
+	canvas2.width = 100;
+	canvas2.height = 100;
+	ctx2 = canvas2.getContext('2d');
+	
+	drawFrame();
+	
+	document.getElementById('renderButton').onclick=function(){
+		drawFrame();
+	}
+}
+</script>
+</head>
+<body>
+<canvas id='canvas1'>
+</canvas>
+<canvas id='canvas2'>
+</canvas>
+<button type='button' id='renderButton'>Render</button><div id='divText'>...</div>
+</body>
+</html>
