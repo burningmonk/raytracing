@@ -78,12 +78,13 @@ var vector3d = function(x, y, z){
 
 var ray_reflection = function(	rayIn, 	// gelen ray
 								dist, 	// ray ın origin inin yüzeye uzaklığı
-								surface_color,	// yüzey rengi
+								//surface_color,	// yüzey rengi
 								surface_normal 	// yüzeyin normal vektörü
 								){
 
 	var L = rayIn.direction.mult(dist);
 	var minusL = L.mult(-1);
+	//var minusLn = minusL.normalise();
 	
 	var s = minusL.dot_product(surface_normal);
 	var N = surface_normal.mult(s);
@@ -100,12 +101,16 @@ var ray_reflection = function(	rayIn, 	// gelen ray
 	//rayOut.color[1] = rayIn.color[1]*surface_color[1];
 	//rayOut.color[2] = rayIn.color[2]*surface_color[2];
 	
+	rayOut.angle = s / L.getLength();
+	
 	return rayOut;
 }
 
 var plane = function(px, py, pz, nx, ny, nz){
 	this.origin = new vector3d(px, py, pz);
 	this.normal = new vector3d(nx, ny, nz);
+	
+	this.refraction = 0;
 	
 	this.color = new Array(255, 255, 255);
 	this.isLight = false;
@@ -123,21 +128,20 @@ var plane = function(px, py, pz, nx, ny, nz){
 		
 		var rh = new rayHit();
 		rh.intersect_distance = dist;
+		rh.hitObject = this;
 		if ( dist>=0 ){
 			rh.intersect_point = rayIn.getPoint(dist);
 			rh.surface_normal = this.normal;
 		}
 		return rh;
 	}
-	
-	/*this.ray_reflection = function(rayIn){
-		//ray_reflection(rayIn, 
-	}*/
 }
 
 var sphere = function(x, y, z, r){
 	this.origin = new vector3d(x, y, z);
 	this.radius = r;
+	//https://en.wikipedia.org/wiki/Snell%27s_law
+	this.refraction = 0;
 	
 	this.color = new Array(255, 255, 255);
 	this.isLight = false;
@@ -170,6 +174,7 @@ var sphere = function(x, y, z, r){
 		
 		var rh = new rayHit();
 		rh.intersect_distance = dist;
+		rh.hitObject = this;
 		if ( dist>=0 ){
 			rh.intersect_point = rayIn.getPoint(dist);
 			rh.surface_normal = this.getNormal(	rh.intersect_point.x, 
@@ -184,6 +189,8 @@ var sphere = function(x, y, z, r){
 var ray = function(){
 	this.origin;// origin
 	this.direction;// unit vector
+	
+	this.angle = 0;
 	
 	//this.color = new Array(255, 255, 255);
 	
@@ -219,53 +226,6 @@ var rayHit = function(){
 	this.surface_normal = null;
 }
 
-var sphere1 = new sphere(0, 0, 0, 3);
-sphere1.color = new Array(0, 255, 0);
-
-var sphere2 = new sphere(5, 1, -1, 2);
-sphere2.color = new Array(255, 0, 0);
-
-var light1 = new sphere(2, 5, -5, 1);
-light1.isLight = true;
-
-var light2 = new sphere(15, 1, -6, 2);
-light2.isLight = true;
-
-var planeTop = new plane(	0, 10, 0,
-							0, -1, 0 );
-						
-var planeBottom = new plane(	0, -3, 0,
-								0, 1, 0 );
-planeBottom.color[0] = 0;
-planeBottom.color[1] = 0;
-planeBottom.color[2] = 255;
-
-var planeLeft = new plane(	-10, 0, 0,
-							1, 0, 0 );
-
-var planeRight = new plane(	10, 0, 0,
-							-1, 0, 0 );
-
-var planeFront = new plane(	0, 0, -50,
-							0, 0, 1 );
-						
-var planeBack = new plane(	0, 0, 50,
-							0, 0, -1 );
-
-var objectList = [];
-objectList.push(sphere1);
-objectList.push(sphere2);
-
-objectList.push(light1);
-//objectList.push(light2);
-
-//objectList.push(planeTop);
-objectList.push(planeBottom);
-//objectList.push(planeLeft);
-//objectList.push(planeRight);
-//objectList.push(planeFront);
-//objectList.push(planeBack);
-
 var screen = new function(){
 	this.left 		= -10;	// ekranın sol kenarı
 	this.right 		= 10;	// ekranın sağ kenarı
@@ -282,6 +242,8 @@ var screen = new function(){
 	this.eyePosition = new vector3d(	(this.left + this.right)/2, 
 										(this.top + this.bottom)/2, 
 										this.z + this.eye_dist );
+	
+	this.objectList = [];
 	
 	// pixel koordinatını vector3d koordinatına dönüştürür
 	this.convert_pixel_to_vertex = function(x, y){
@@ -307,124 +269,139 @@ var screen = new function(){
 		
 		return ray_eye;
 	}
-};
-
-function getClosestIntersectionObject(rayIn, objExclude){
-	var distMin = Number.POSITIVE_INFINITY;
-	var objClosest = null;
-	for(var i=0; i<objectList.length; i++){
-		var obj = objectList[i];
-		if ( obj != objExclude ){
-			var rh = obj.ray_intersect(rayIn);
-			if ( rh.intersect_point!=null ){
-				if ( objClosest==null || rh.intersect_distance<distMin ){
-					objClosest = obj;
-					distMin = rh.intersect_distance;
-				}
-			}
-		}
-	}
 	
-	return objClosest;
-}
-
-function getLightIntersectionCount(xx, yy, zz){
-	var blockedLightCount = 0;
-	var totalLightCount = 0;
-	for(var i=0; i<objectList.length; i++){
-		var objLight = objectList[i];
-		
-		if ( objLight.isLight==true ){
-			totalLightCount++;
-			
-			var ray_to_light = new ray();
-			ray_to_light.set_origin(xx, yy, zz);
-			ray_to_light.set_destination(objLight.origin.x, objLight.origin.y, objLight.origin.z);
-			
-			for(var i2=0; i2<objectList.length; i2++){
-				var objMesh = objectList[i2];
-				if ( objMesh.isLight==false ){
-					var rh = objMesh.ray_intersect(ray_to_light);
-					if ( rh.intersect_point!=null ){
-						blockedLightCount++;
+	this.getClosestIntersection = function(rayIn, objExclude){
+		var distMin = Number.POSITIVE_INFINITY;
+		//var objClosest = null;
+		var rhClosest = null;
+		for(var i=0; i<screen.objectList.length; i++){
+			var obj = screen.objectList[i];
+			if ( obj != objExclude ){
+				var rh = obj.ray_intersect(rayIn);
+				if ( rh.intersect_distance>0 ){
+					if ( rhClosest==null || rh.intersect_distance<distMin ){
+						rhClosest = rh;
+						distMin = rh.intersect_distance;
 					}
 				}
 			}
 		}
+		
+		return rhClosest;
 	}
-	return {
-		blockedLightCount:blockedLightCount,
-		totalLightCount:totalLightCount
-	};
-}
+	
+	this.getLightIntersectionCount = function(xx, yy, zz){
+		var blockedLightCount = 0;
+		var totalLightCount = 0;
+		for(var i=0; i<screen.objectList.length; i++){
+			var objLight = screen.objectList[i];
+			
+			if ( objLight.isLight==true ){
+				totalLightCount++;
+				
+				var ray_to_light = new ray();
+				ray_to_light.set_origin(xx, yy, zz);
+				ray_to_light.set_destination(objLight.origin.x, objLight.origin.y, objLight.origin.z);
+				
+				for(var i2=0; i2<screen.objectList.length; i2++){
+					var objMesh = screen.objectList[i2];
+					if ( objMesh.isLight==false ){
+						var rh = objMesh.ray_intersect(ray_to_light);
+						if ( rh.intersect_distance>0 ){
+							blockedLightCount++;
+						}
+					}
+				}
+			}
+		}
+		return {
+			blockedLightCount:blockedLightCount,
+			totalLightCount:totalLightCount
+		};
+	}
+	
+	this.addObject_sphere = function(ox, oy, oz, r, cr, cg, cb){
+		var s = new sphere(ox, oy, oz, r);
+		s.color = new Array(cr, cg, cb);
+		
+		this.objectList.push(s);
+	}
+	
+	this.addObject_plane = function(ox, oy, oz, nx, ny, nz, cr, cg, cb){
+		var p = new plane(	ox, oy, oz,
+							nx, ny, nz );
+		p.color[0] = cr;
+		p.color[1] = cg;
+		p.color[2] = cb;
+		
+		this.objectList.push(p);
+	}
+	
+	this.addLight_sphere = function(ox, oy, oz, r, cr, cg, cb){
+		var s = new sphere(ox, oy, oz, r);
+		s.color = new Array(cr, cg, cb);
+		s.isLight = true;
+		
+		this.objectList.push(s);
+	}
+};
 
-// x = 0 ... width(pixel)
-// y = 0 ... height(pixel)
-var pleaseDebugOnce = false;
-function shader(x, y){
-	var ray_eye = screen.getEyeRay(x, y);
-	
+screen.addObject_sphere(5, 1, -1, 2, 	255, 0, 0 );
+screen.addObject_sphere(0, 0, 0, 3, 	0, 255, 0 );
+
+screen.addObject_plane(	0, -3, 0, 0, 1, 0, 0, 0, 255 ); 	// bottom
+//screen.addObject_plane(	0, 10, 0, 0, -1, 0, 0, 0, 255 ); 	// top
+//screen.addObject_plane(	-10, 0, 0, 1, 0, 0, 0, 0, 255 ); 	// left
+//screen.addObject_plane(	10, 0, 0, -1, 0, 0, 0, 0, 255 ); 	// right
+//screen.addObject_plane(	0, 0, -50, 0, 0, 1, 0, 0, 255 ); 	// front
+//screen.addObject_plane(	0, 0, 50, 0, 0, -1, 0, 0, 255 ); 	// back
+
+screen.addLight_sphere(	-2, 5, 0, 1, 255, 255, 255 );
+//screen.addLight_sphere(	15, 1, -6, 2, 255, 255, 255 );
+
+var getRayColor = function(ray_cur, subrayCapacity){
 	var color = new Array(0, 0, 0);
-	
-	var ray_cur = ray_eye;
-	if ( pleaseDebugOnce==true ){
-		debugger;
-		pleaseDebugOnce = false;
-	}
 	var noLightFactor = .5;
 	var objClosest = null;
+	var rhClosest = null;
 	for(var i=0; i<screen.bounceMax; i++){
-		objClosest = getClosestIntersectionObject(ray_cur, objClosest);
-		if ( objClosest!=null ){
-			color[0] = objClosest.color[0]+color[0];
-			color[1] = objClosest.color[1]+color[1];
-			color[2] = objClosest.color[2]+color[2];
-			
-			if ( objClosest.isLight==true ){
-				return {
-						r:objClosest.color[0],
-						g:objClosest.color[1],
-						b:objClosest.color[2],
-						a:255
-					};
-			}else{
-				var rh = objClosest.ray_intersect(ray_cur);
-				
-				var v1 = rh.surface_normal.mult(0.1).add(rh.intersect_point);
-				var lic = getLightIntersectionCount(v1.x, v1.y, v1.z);
-				if ( lic.blockedLightCount>0 ){
-					var tmp = color[0]+color[1]+color[2];
-					color[0] = 0;//Math.floor(tmp*.2);
-					color[1] = 0;//Math.floor(tmp*.2);
-					color[2] = 0;//Math.floor(tmp*.2);
-					return {
-						r:color[0],
-						g:color[1],
-						b:color[2],
-						a:255
-					};/**/
-				}else{
-					var dummy = 0;
-				}
-				
-				
-				
-				// zaten biliyoruz kesişme var --> getClosestIntersectionObject
-				//if ( isNaN(dist) || dist<0 ){
-					//return null;// kesişme yoksa veya geriye doğru kesişme varsa
-					//break;
-				//}
-				
-				ray_cur = ray_reflection(	ray_cur, 
-											rh.intersect_distance, 
-											objClosest.color, 
-											rh.surface_normal );
-			}
-		}else{
-			if ( color[0]<127 && color[0]!=0 ){
-				//debugger;
-			}
+		rhClosest = screen.getClosestIntersection(ray_cur, objClosest);
+		if ( rhClosest==null ){
 			break;
+		}
+		
+		objClosest = rhClosest.hitObject;
+		
+		if ( objClosest.isLight==true ){
+			return {
+					r:objClosest.color[0],
+					g:objClosest.color[1],
+					b:objClosest.color[2],
+					a:255
+				};
+		}else{
+			var v1 = rhClosest.surface_normal.mult(0.1).add(rhClosest.intersect_point);
+			var lic = screen.getLightIntersectionCount(v1.x, v1.y, v1.z);
+			var shadowFactor = 1;
+			if ( lic.blockedLightCount>0 ){
+				//var tmp = color[0]+color[1]+color[2];
+				shadowFactor = 0.7;
+				/*return {
+					r:color[0],
+					g:color[1],
+					b:color[2],
+					a:255
+				};*/
+			}
+			
+			ray_cur = ray_reflection(	ray_cur, 
+										rhClosest.intersect_distance, 
+										//objClosest.color, 
+										rhClosest.surface_normal );
+										
+			color[0] += objClosest.color[0]*ray_cur.angle*shadowFactor;
+			color[1] += objClosest.color[1]*ray_cur.angle*shadowFactor;
+			color[2] += objClosest.color[2]*ray_cur.angle*shadowFactor;
 		}
 	}
 	if ( i==0 ){
@@ -442,6 +419,22 @@ function shader(x, y){
 				b:color[2],
 				a:255
 			};
+}
+
+// x = 0 ... width(pixel)
+// y = 0 ... height(pixel)
+var pleaseDebugOnce = false;
+function shader(x, y){
+	var ray_eye = screen.getEyeRay(x, y);
+	
+	var color = new Array(0, 0, 0);
+	
+	if ( pleaseDebugOnce==true ){
+		debugger;
+		pleaseDebugOnce = false;
+	}
+	
+	return getRayColor(ray_eye, 0);
 }
 
 function drawFrame(){
